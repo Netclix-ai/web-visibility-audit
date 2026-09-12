@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta name="robots" content="noindex">
+    <meta name="description" content="Professional website visibility audits — SEO, performance, AI search readiness and local visibility scoring by Netclix Marketing.">
+    <title>Website Visibility Audit · Netclix Marketing</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d4ed8'/%3E%3Cpath d='M8 21l5-6 4 4 7-9' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/static/styles.css?v={{ css_hash }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+            <a class="brand" href="#/dashboard">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 32 32" width="20" height="20" fill="none" aria-hidden="true">
+                        <path d="M6 23l7-8 4.5 4L26 8" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="26" cy="8" r="2.4" fill="currentColor"/>
+                    </svg>
+                </span>
+                <span class="brand-text">
+                    <strong>Website Visibility</strong>
+                    <span>Audit Platform</span>
+                </span>
+            </a>
+
+            <nav class="side-nav" aria-label="Primary">
+                <div class="nav-group">
+                    <div class="nav-heading">Workspace</div>
+                    <a class="nav-item nav-item-top" data-nav="dashboard" href="#/dashboard">
+                        <span class="nav-ico" data-icon="dashboard" aria-hidden="true"></span>Website Audit Dashboard
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="create-audit" href="#/create-audit">
+                        <span class="nav-ico" data-icon="plus" aria-hidden="true"></span>Create Audit
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="settings" href="#/settings">
+                        <span class="nav-ico" data-icon="settings" aria-hidden="true"></span>Settings
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="ghl-leads" href="#/ghl-leads">
+                        <span class="nav-ico" data-icon="zap" aria-hidden="true"></span>GHL Leads
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="bulk-scoring" href="#/bulk-scoring">
+                        <span class="nav-ico" data-icon="file-text" aria-hidden="true"></span>Bulk Scoring
+                    </a>
+
+                    <a class="nav-item nav-item-top" data-nav="local-visibility" href="#/local-visibility">
+                        <span class="nav-ico" data-icon="map-pin" aria-hidden="true"></span>Local Visibility Dashboard
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="local-visibility-ghl-leads" href="#/local-visibility/ghl-leads">
+                        <span class="nav-ico" data-icon="zap" aria-hidden="true"></span>GHL Leads
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="local-visibility-bulk-scoring" href="#/local-visibility/bulk-scoring">
+                        <span class="nav-ico" data-icon="file-text" aria-hidden="true"></span>Bulk Scoring
+                    </a>
+                    <a class="nav-item nav-item-inset" data-nav="local-visibility-manual" href="#/local-visibility/manual">
+                        <span class="nav-ico" data-icon="edit" aria-hidden="true"></span>Manual Scoring
+                    </a>
+                </div>
+                <div class="nav-group">
+                    <div class="nav-heading">Platform Roadmap</div>
+                    <span class="nav-item disabled" aria-disabled="true" tabindex="-1">
+                        <span class="nav-ico" data-icon="zap" aria-hidden="true"></span>AI Visibility
+                        <span class="soon-tag">Coming Soon</span>
+                    </span>
+                    <span class="nav-item disabled" aria-disabled="true" tabindex="-1">
+                        <span class="nav-ico" data-icon="search" aria-hidden="true"></span>Search Visibility
+                        <span class="soon-tag">Coming Soon</span>
+                    </span>
+                    <span class="nav-item disabled" aria-disabled="true" tabindex="-1">
+                        <span class="nav-ico" data-icon="link" aria-hidden="true"></span>Authority
+                        <span class="soon-tag">Coming Soon</span>
+                    </span>
+                    <span class="nav-item disabled" aria-disabled="true" tabindex="-1">
+                        <span class="nav-ico" data-icon="message" aria-hidden="true"></span>Social
+                        <span class="soon-tag">Coming Soon</span>
+                    </span>
+                    <span class="nav-item disabled" aria-disabled="true" tabindex="-1">
+                        <span class="nav-ico" data-icon="file-text" aria-hidden="true"></span>Reporting
+                        <span class="soon-tag">Coming Soon</span>
+                    </span>
+                </div>
+            </nav>
+
+            <div class="sidebar-foot">
+                <span class="foot-label">Powered by</span>
+                <span class="foot-brand">Netclix Marketing</span>
+            </div>
+        </aside>
+        <div class="scrim" id="scrim" hidden></div>
+
+        <div class="main-col">
+            <header class="topbar">
+                <button class="icon-btn" id="navToggle" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">
+                    <span data-icon="menu" aria-hidden="true"></span>
+                </button>
+                <span class="topbar-brand">Website Visibility Audit</span>
+            </header>
+            <main class="view" id="main" tabindex="-1"></main>
+        </div>
+    </div>
+
+    <div class="toast-root" id="toast-root" role="status" aria-live="polite"></div>
+
+    <script src="/static/js/api.js?v={{ view_hashes['api.js'] }}"></script>
+    <script src="/static/js/ui.js?v={{ view_hashes['ui.js'] }}"></script>
+    <script src="/static/js/views/dashboard.js?v={{ view_hashes['views/dashboard.js'] }}"></script>
+    <script src="/static/js/views/create.js?v={{ view_hashes['views/create.js'] }}"></script>
+    <script src="/static/js/views/business.js?v={{ view_hashes['views/business.js'] }}"></script>
+    <script src="/static/js/views/audit.js?v={{ view_hashes['views/audit.js'] }}"></script>
+    <script src="/static/js/views/report.js?v={{ view_hashes['views/report.js'] }}"></script>
+    <script src="/static/js/views/settings.js?v={{ view_hashes['views/settings.js'] }}"></script>
+    <script src="/static/js/views/ghl-leads.js?v={{ view_hashes['views/ghl-leads.js'] }}"></script>
+    <script src="/static/js/views/bulk-scoring.js?v={{ view_hashes['views/bulk-scoring.js'] }}"></script>
+    <script src="/static/js/views/local-visibility.js?v={{ view_hashes['views/local-visibility.js'] }}"></script>
+    <script src="/static/js/views/local-visibility-ghl-leads.js?v={{ view_hashes['views/local-visibility-ghl-leads.js'] }}"></script>
+    <script src="/static/js/views/local-visibility-bulk.js?v={{ view_hashes['views/local-visibility-bulk.js'] }}"></script>
+    <script src="/static/js/views/local-visibility-manual.js?v={{ view_hashes['views/local-visibility-manual.js'] }}"></script>
+    <script src="/static/app.js?v={{ js_hash }}"></script>
+</body>
+</html>

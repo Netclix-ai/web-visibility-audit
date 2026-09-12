@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <meta name="description" content="Free instant website visibility audit — see how your website scores across search, performance and AI readiness.">
+    <title>Website Visibility Audit</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d4ed8'/%3E%3Cpath d='M8 21l5-6 4 4 7-9' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/static/widget.css?v={{ widget_css_hash }}">
+</head>
+<body>
+    <div class="wv-page">
+        <div class="wv-card">
+            <div class="wv-logo-slot" id="wv-logo-slot" aria-hidden="true"></div>
+            <h1 class="wv-heading" id="wv-heading">Audit Your Website Now!</h1>
+            <p class="wv-sub">Enter your website below — your visibility score appears here instantly and is emailed to you.</p>
+
+            <div id="wv-body" aria-live="polite">
+                <form class="wv-form" id="wv-form" novalidate>
+                    <div class="wv-grid">
+                        <div class="wv-field" id="wv-field-url">
+                            <label for="wv-url">Website URL <em aria-hidden="true">*</em></label>
+                            <input id="wv-url" name="website_url" type="text" inputmode="url" autocomplete="url" placeholder="yourcompany.com" required aria-required="true">
+                            <span class="wv-field-err" id="wv-err-url" role="alert"></span>
+                        </div>
+                        <div class="wv-field wv-span2" id="wv-field-biz">
+                            <label for="wv-biz">Business Name</label>
+                            <input id="wv-biz" name="business_name" type="text" autocomplete="organization" placeholder="Your Company Inc.">
+                        </div>
+                        <div class="wv-field" id="wv-field-fn">
+                            <label for="wv-fn">First Name <em aria-hidden="true">*</em></label>
+                            <input id="wv-fn" name="first_name" type="text" autocomplete="given-name" placeholder="Jane" required aria-required="true">
+                            <span class="wv-field-err" id="wv-err-fn" role="alert"></span>
+                        </div>
+                        <div class="wv-field">
+                            <label for="wv-ln">Last Name</label>
+                            <input id="wv-ln" name="last_name" type="text" autocomplete="family-name" placeholder="Smith">
+                        </div>
+                        <div class="wv-field" id="wv-field-email">
+                            <label for="wv-email">Email <em aria-hidden="true">*</em></label>
+                            <input id="wv-email" name="email" type="email" autocomplete="email" placeholder="jane@yourcompany.com" required aria-required="true">
+                            <span class="wv-field-err" id="wv-err-email" role="alert"></span>
+                        </div>
+                        <div class="wv-field wv-span2">
+                            <label for="wv-phone">Phone Number</label>
+                            <input id="wv-phone" name="phone" type="tel" autocomplete="tel" placeholder="(555) 123-4567">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="wv-btn wv-btn-submit" id="wv-submit">
+                        <span class="wv-spinner" aria-hidden="true"></span>
+                        <span id="wv-submit-text">Check</span>
+                        <svg class="wv-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                    </button>
+
+                    <p class="wv-fineprint">Free instant report · No obligation · Your details are only used to send your results</p>
+
+                    <div class="wv-alert" id="wv-alert" role="alert">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        <span><strong id="wv-alert-title">Something went wrong</strong><span id="wv-alert-msg"></span><button type="button" class="wv-alert-retry" id="wv-alert-retry">Try again</button></span>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <p class="wv-pagefoot" id="wv-pagefoot"></p>
+    </div>
+
+    <script src="/static/widget.js?v={{ widget_js_hash }}"></script>
+</body>
+</html>
