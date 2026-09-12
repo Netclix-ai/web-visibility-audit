@@ -88,13 +88,13 @@ WVA.views.rankChecker = async function (main) {
     function quickLinksHtml() {
         return `<div class="mt-16" style="display:flex;gap:12px;flex-wrap:wrap;">
             <a class="btn btn-primary" href="#/rank-checker/manual">
-                <span data-icon="edit" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></span>Manual Scoring
+                <span data-icon="edit" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></span>Manual Checker
             </a>
             <a class="btn btn-secondary" href="#/rank-checker/bulk-scoring">
-                <span data-icon="file-text" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>Bulk Scoring
+                <span data-icon="file-text" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>Bulk Checker
             </a>
             <a class="btn btn-secondary" href="#/rank-checker/ghl-leads">
-                <span data-icon="zap" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>GHL Leads
+                <span data-icon="zap" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>GHL Checker
             </a>
         </div>`;
     }

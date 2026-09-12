@@ -62,7 +62,7 @@ WVA.views.rankCheckerGhlLeads = async function (main) {
 
     function pageHead() {
         return U.pageHead({
-            title: 'Rank Checker GHL Leads',
+            title: 'Rank Checker GHL Checker',
             sub: 'Keyword rank checks triggered by the GoHighLevel webhook integration.',
             back: { href: '#/rank-checker', label: 'Rank Checker Dashboard' },
         });

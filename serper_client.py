@@ -40,6 +40,23 @@ def _headers() -> dict:
     return {"X-API-KEY": _api_key() or "", "Content-Type": "application/json"}
 
 
+def location_param(city: str | None, state: str | None) -> str | None:
+    """Builds the canonical `location` string Serper expects for
+    city-level geo-targeting, e.g. "Meridian,Idaho,United States".
+    Confirmed via live testing: without this, Serper only geo-targets at
+    the `gl` country level and the proxy IP's inferred location can land
+    anywhere in the country (seen: a Meridian, Idaho query returning
+    Wichita/Omaha/Alpharetta-area results with no location param set).
+    Passing "City,State,United States" reliably re-targets results to
+    the right metro area. Returns None if there isn't enough info to
+    build a location (falls back to `gl` country-only targeting)."""
+    city = (city or "").strip()
+    state = (state or "").strip()
+    if not city or not state:
+        return None
+    return f"{city},{state},United States"
+
+
 def _post(path: str, payload: dict) -> tuple[dict | None, str | None]:
     api_key = _api_key()
     if not api_key:
@@ -57,11 +74,18 @@ def _post(path: str, payload: dict) -> tuple[dict | None, str | None]:
         return None, f"Could not reach Serper: {e}"
 
 
-def search_organic(query: str, gl: str = "us") -> tuple[list[dict] | None, str | None]:
+def search_organic(query: str, gl: str = "us", location: str | None = None) -> tuple[list[dict] | None, str | None]:
     """POST /search. Returns (organic_results, error) -- organic_results
     is a list of {position, title, link, snippet}, top ~10-100 depending
-    on Serper's default page size (typically the first SERP page, ~10)."""
-    data, error = _post("/search", {"q": query, "gl": gl})
+    on Serper's default page size (typically the first SERP page, ~10).
+
+    `location` should be built via `location_param(city, state)` when
+    available -- without it, Serper only geo-targets by `gl` (country),
+    and the proxy's inferred location can land anywhere in that country."""
+    payload = {"q": query, "gl": gl}
+    if location:
+        payload["location"] = location
+    data, error = _post("/search", payload)
     if error:
         return None, error
     organic = (data or {}).get("organic") or []
@@ -72,11 +96,17 @@ def search_organic(query: str, gl: str = "us") -> tuple[list[dict] | None, str |
     ], None
 
 
-def search_maps(query: str, gl: str = "us") -> tuple[list[dict] | None, str | None]:
+def search_maps(query: str, gl: str = "us", location: str | None = None) -> tuple[list[dict] | None, str | None]:
     """POST /maps. Returns (places, error) -- places is a list of
     {position, title, address, rating, ratingCount, website, phoneNumber,
-    cid}, i.e. the Google Maps / Map Pack ranking for this query."""
-    data, error = _post("/maps", {"q": query, "gl": gl})
+    cid}, i.e. the Google Maps / Map Pack ranking for this query.
+
+    `location` should be built via `location_param(city, state)` when
+    available, same rationale as `search_organic`."""
+    payload = {"q": query, "gl": gl}
+    if location:
+        payload["location"] = location
+    data, error = _post("/maps", payload)
     if error:
         return None, error
     places = (data or {}).get("places") or []

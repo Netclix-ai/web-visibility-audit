@@ -582,7 +582,7 @@ def _rank_check_scan_brief(scan: "m.RankCheckScan") -> dict:
 
 
 def _run_keyword_checks(scan_id: str, business_name: str, website: str, location_query: str,
-                         keywords: list[str]) -> None:
+                         keywords: list[str], city: str | None = None, state: str | None = None) -> None:
     """Runs each keyword against Serper's /search (organic) and /maps
     (Map Pack), writing one RankCheckKeywordResult row per keyword, then
     marks the scan completed/failed. Opens its own DB sessions
@@ -590,7 +590,16 @@ def _run_keyword_checks(scan_id: str, business_name: str, website: str, location
     request thread (manual single-check, GHL webhook) or a bulk-upload
     worker thread. Never raises -- a per-keyword Serper failure just
     leaves that keyword's positions null with an error_message, so one
-    bad keyword can't abort the whole scan."""
+    bad keyword can't abort the whole scan.
+
+    `city`/`state` build a Serper `location` param (see
+    serper_client.location_param) so results are actually geo-targeted to
+    the business's metro area -- without it Serper only targets by `gl`
+    (country), and results can otherwise land anywhere in the country.
+    The location text embedded in `location_query`/`query` string still
+    helps too, but the dedicated `location` param is what actually moves
+    Google's ranking computation to the right area."""
+    loc_param = serper_client.location_param(city, state)
     any_success = False
     last_error = None
     for kw in keywords:
@@ -598,8 +607,8 @@ def _run_keyword_checks(scan_id: str, business_name: str, website: str, location
         if not kw:
             continue
         query = f"{kw} {location_query}".strip()
-        organic, err1 = serper_client.search_organic(query)
-        maps_places, err2 = serper_client.search_maps(query)
+        organic, err1 = serper_client.search_organic(query, location=loc_param)
+        maps_places, err2 = serper_client.search_maps(query, location=loc_param)
         organic = organic or []
         maps_places = maps_places or []
         organic_position, organic_url = (
@@ -679,7 +688,7 @@ def _process_rank_check_row(row: dict, cols: dict, keywords: list[str]) -> dict:
             db.flush()
             scan_id = scan.id
 
-        _run_keyword_checks(scan_id, business_name, website, location_query, keywords)
+        _run_keyword_checks(scan_id, business_name, website, location_query, keywords, city=city, state=state)
 
         with session_scope() as db:
             results = (
@@ -1576,7 +1585,7 @@ def create_app(static_dir: str) -> FastAPI:
         db.commit()
         db.refresh(scan)
 
-        _run_keyword_checks(scan.id, business_name, website, location_query, keywords)
+        _run_keyword_checks(scan.id, business_name, website, location_query, keywords, city=payload.city, state=payload.state)
 
         db.refresh(scan)
         keyword_results = (
@@ -2077,7 +2086,7 @@ def create_app(static_dir: str) -> FastAPI:
         db.commit()
         db.refresh(scan)
 
-        _run_keyword_checks(scan.id, business_name, website, location_query, keywords)
+        _run_keyword_checks(scan.id, business_name, website, location_query, keywords, city=payload.city, state=payload.state)
 
         db.refresh(scan)
         keyword_results = (

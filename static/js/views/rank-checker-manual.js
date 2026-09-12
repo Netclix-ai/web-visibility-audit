@@ -28,7 +28,7 @@ WVA.views.rankCheckerManual = async function (main) {
 
     function pageHtml() {
         return U.pageHead({
-            title: 'Rank Checker Manual Scoring',
+            title: 'Rank Checker Manual Checker',
             sub: 'Run a one-off keyword rank check for a single business. Every check is saved below.',
             back: { href: '#/rank-checker', label: 'Rank Checker Dashboard' },
         }) + `<div class="card card-pad form-card" id="rc-single-card">

@@ -27,7 +27,7 @@ WVA.views.rankCheckerBulk = async function (main) {
 
     function pageHtml() {
         return U.pageHead({
-            title: 'Rank Checker Bulk Scoring',
+            title: 'Rank Checker Bulk Checker',
             sub: 'Upload a lead list, check each business\'s keyword rankings via Serper.dev, and download the same file back with organic + Map Pack rank columns added.',
             back: { href: '#/rank-checker', label: 'Rank Checker Dashboard' },
         }) + `<div class="card card-pad form-card" id="rc-upload-card">
