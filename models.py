@@ -153,6 +153,9 @@ class RankCheckScan(Base):
     business_id = Column(String, ForeignKey("businesses.id"), nullable=False)
     website = Column(String)  # domain used to match "your" organic result
     location_query = Column(String)  # e.g. "Austin, TX" or a zip -- appended to each keyword
+    check_type = Column(String, default="both")  # "organic" | "maps" | "both" -- which Serper
+    # endpoint(s) this scan actually calls. Lets a bulk/GHL campaign request only the checks
+    # it needs (e.g. a maps-only outreach campaign never burns an organic call, and vice versa).
     status = Column(String, default="running")  # running | completed | failed
     error_message = Column(Text)
     created_at = Column(DateTime(timezone=True), default=now)

@@ -53,6 +53,7 @@ COLUMN_MIGRATIONS = [
     ("businesses", "ghl_contact_id", "VARCHAR"),
     ("audits", "depth", "VARCHAR DEFAULT 'full'"),
     ("bulk_upload_jobs", "job_type", "VARCHAR DEFAULT 'website_audit'"),
+    ("rank_check_scans", "check_type", "VARCHAR DEFAULT 'both'"),
 ]
 
 # Raw, idempotent SQL statements for changes ADD COLUMN can't express

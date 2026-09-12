@@ -572,6 +572,7 @@ def _rank_check_scan_brief(scan: "m.RankCheckScan") -> dict:
         "lead_source": biz.lead_source if biz else None,
         "website": scan.website,
         "location_query": scan.location_query,
+        "check_type": scan.check_type or "both",
         "status": scan.status,
         "error_message": scan.error_message,
         "keyword_count": len(results),
@@ -582,15 +583,23 @@ def _rank_check_scan_brief(scan: "m.RankCheckScan") -> dict:
 
 
 def _run_keyword_checks(scan_id: str, business_name: str, website: str, location_query: str,
-                         keywords: list[str], city: str | None = None, state: str | None = None) -> None:
-    """Runs each keyword against Serper's /search (organic) and /maps
-    (Map Pack), writing one RankCheckKeywordResult row per keyword, then
+                         keywords: list[str], city: str | None = None, state: str | None = None,
+                         check_type: str = "both") -> None:
+    """Runs each keyword against Serper's /search (organic) and/or /maps
+    (Map Pack) -- which one(s) depends on `check_type` ("organic" | "maps"
+    | "both") -- writing one RankCheckKeywordResult row per keyword, then
     marks the scan completed/failed. Opens its own DB sessions
     (session_scope) so it works identically whether called from the main
     request thread (manual single-check, GHL webhook) or a bulk-upload
     worker thread. Never raises -- a per-keyword Serper failure just
     leaves that keyword's positions null with an error_message, so one
     bad keyword can't abort the whole scan.
+
+    `check_type` exists so a bulk/GHL campaign can request only the check
+    it actually needs (e.g. a Map Pack-only outreach campaign never burns
+    an organic Serper call, and vice versa) -- the scan's own `check_type`
+    column (see _rank_check_scan_brief) tells the UI/report which
+    column(s) are meaningful vs. simply never run for that scan.
 
     `city`/`state` build a Serper `location` param (see
     serper_client.location_param) so results are actually geo-targeted to
@@ -599,6 +608,9 @@ def _run_keyword_checks(scan_id: str, business_name: str, website: str, location
     The location text embedded in `location_query`/`query` string still
     helps too, but the dedicated `location` param is what actually moves
     Google's ranking computation to the right area."""
+    check_type = check_type if check_type in ("organic", "maps", "both") else "both"
+    run_organic = check_type in ("organic", "both")
+    run_maps = check_type in ("maps", "both")
     loc_param = serper_client.location_param(city, state)
     any_success = False
     last_error = None
@@ -607,17 +619,23 @@ def _run_keyword_checks(scan_id: str, business_name: str, website: str, location
         if not kw:
             continue
         query = f"{kw} {location_query}".strip()
-        organic, err1 = serper_client.search_organic(query, location=loc_param)
-        maps_places, err2 = serper_client.search_maps(query, location=loc_param)
+        organic, err1 = serper_client.search_organic(query, location=loc_param) if run_organic else (None, None)
+        maps_places, err2 = serper_client.search_maps(query, location=loc_param) if run_maps else (None, None)
         organic = organic or []
         maps_places = maps_places or []
         organic_position, organic_url = (
-            serper_client.find_organic_position(organic, website) if website else (None, None)
+            serper_client.find_organic_position(organic, website) if (run_organic and website) else (None, None)
         )
-        map_pack_position = serper_client.find_map_pack_position(maps_places, business_name)
+        map_pack_position = serper_client.find_map_pack_position(maps_places, business_name) if run_maps else None
+        errors = []
+        if run_organic and err1:
+            errors.append(err1)
+        if run_maps and err2:
+            errors.append(err2)
+        ran_count = int(run_organic) + int(run_maps)
         error_message = None
-        if err1 and err2:
-            error_message = err1 or err2
+        if ran_count and len(errors) == ran_count:
+            error_message = errors[0]
             last_error = error_message
         else:
             any_success = True
@@ -641,15 +659,19 @@ def _run_keyword_checks(scan_id: str, business_name: str, website: str, location
             scan.completed_at = datetime.now(timezone.utc)
 
 
-def _process_rank_check_row(row: dict, cols: dict, keywords: list[str]) -> dict:
+def _process_rank_check_row(row: dict, cols: dict, keywords: list[str], check_type: str = "both") -> dict:
     """Runs a rank check for one CSV row, returning the row dict with
     per-keyword columns appended (e.g. "tree trimming - Organic Rank",
-    "tree trimming - Map Pack Rank"). Never raises -- any per-row problem
-    (missing name/website) just leaves those columns blank."""
+    "tree trimming - Map Pack Rank" -- only the column(s) relevant to
+    `check_type` are populated/included by the caller). Never raises --
+    any per-row problem (missing name/website) just leaves those columns
+    blank."""
     out = dict(row)
     for kw in keywords:
-        out[f"{kw} - Organic Rank"] = ""
-        out[f"{kw} - Map Pack Rank"] = ""
+        if check_type in ("organic", "both"):
+            out[f"{kw} - Organic Rank"] = ""
+        if check_type in ("maps", "both"):
+            out[f"{kw} - Map Pack Rank"] = ""
 
     business_name = (row.get(cols["name"]) or "").strip() if cols["name"] else ""
     website = (row.get(cols["website"]) or "").strip() if cols["website"] else ""
@@ -682,13 +704,15 @@ def _process_rank_check_row(row: dict, cols: dict, keywords: list[str]) -> dict:
             db.add(biz)
             db.flush()
             scan = m.RankCheckScan(
-                business_id=biz.id, website=website, location_query=location_query, status="running",
+                business_id=biz.id, website=website, location_query=location_query,
+                check_type=check_type, status="running",
             )
             db.add(scan)
             db.flush()
             scan_id = scan.id
 
-        _run_keyword_checks(scan_id, business_name, website, location_query, keywords, city=city, state=state)
+        _run_keyword_checks(scan_id, business_name, website, location_query, keywords,
+                             city=city, state=state, check_type=check_type)
 
         with session_scope() as db:
             results = (
@@ -697,9 +721,9 @@ def _process_rank_check_row(row: dict, cols: dict, keywords: list[str]) -> dict:
                 .all()
             )
             for r in results:
-                if r.organic_position:
+                if check_type in ("organic", "both") and r.organic_position:
                     out[f"{r.keyword} - Organic Rank"] = str(r.organic_position)
-                if r.map_pack_found:
+                if check_type in ("maps", "both") and r.map_pack_found:
                     out[f"{r.keyword} - Map Pack Rank"] = str(r.map_pack_position)
     except Exception as e:
         print(f"[rank_checker] row failed for {business_name}: {e}")
@@ -707,7 +731,7 @@ def _process_rank_check_row(row: dict, cols: dict, keywords: list[str]) -> dict:
 
 
 def _run_rank_check_job(job_id: str, fieldnames: list[str], rows: list[dict], cols: dict,
-                         keywords: list[str]) -> None:
+                         keywords: list[str], check_type: str = "both") -> None:
     try:
         n = len(rows)
         out_rows: list[dict | None] = [None] * n
@@ -724,7 +748,7 @@ def _run_rank_check_job(job_id: str, fieldnames: list[str], rows: list[dict], co
                         job.processed_rows = current
 
         def _work(i: int, row: dict) -> None:
-            out_rows[i] = _process_rank_check_row(row, cols, keywords)
+            out_rows[i] = _process_rank_check_row(row, cols, keywords, check_type=check_type)
             _bump_progress()
 
         max_workers = min(RANK_CHECK_MAX_WORKERS, n) or 1
@@ -735,8 +759,10 @@ def _run_rank_check_job(job_id: str, fieldnames: list[str], rows: list[dict], co
 
         extra_cols = []
         for kw in keywords:
-            extra_cols.append(f"{kw} - Organic Rank")
-            extra_cols.append(f"{kw} - Map Pack Rank")
+            if check_type in ("organic", "both"):
+                extra_cols.append(f"{kw} - Organic Rank")
+            if check_type in ("maps", "both"):
+                extra_cols.append(f"{kw} - Map Pack Rank")
         out_fieldnames = list(fieldnames) + extra_cols
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=out_fieldnames, extrasaction="ignore")
@@ -894,7 +920,8 @@ class RankCheckSingleRequest(BaseModel):
     string appended to each keyword ("<keyword> <city>, <state>"), since
     Map Pack results are hyperlocal. `keywords` is optional -- if omitted
     or empty, falls back to the default keyword template in
-    RankCheckSettings (Settings page)."""
+    RankCheckSettings (Settings page). `check_type` picks which Serper
+    endpoint(s) to actually call: "organic", "maps", or "both" (default)."""
     business_name: str
     website: str
     street: str | None = None
@@ -906,13 +933,18 @@ class RankCheckSingleRequest(BaseModel):
     email: str | None = None
     phone: str | None = None
     keywords: list[str] | None = None
+    check_type: str = "both"
 
 
 class GHLRankCheckRequest(BaseModel):
     """Rank Checker counterpart of GHLAuditRequest/GHLLocalVisibilityRequest.
     `keywords` is optional -- if the GHL workflow doesn't map a keyword
     list, the default keyword template from RankCheckSettings is used, so
-    a bulk GHL automation can run with zero per-contact keyword config."""
+    a bulk GHL automation can run with zero per-contact keyword config.
+    `check_type` ("organic" | "maps" | "both", default "both") lets a GHL
+    Workflow built for a specific campaign (e.g. a Map Pack-only outreach
+    push) request only the check it needs -- each Workflow can hardcode
+    its own value in the webhook's JSON body."""
     contact_id: str
     business_name: str
     website: str
@@ -925,6 +957,7 @@ class GHLRankCheckRequest(BaseModel):
     email: str | None = None
     phone: str | None = None
     keywords: list[str] | None = None
+    check_type: str = "both"
 
 
 class RankCheckSettingsUpdate(BaseModel):
@@ -1551,6 +1584,7 @@ def create_app(static_dir: str) -> FastAPI:
         keywords = [k.strip() for k in (payload.keywords or []) if k.strip()] or _default_rank_check_keywords(db)
         if not keywords:
             raise HTTPException(400, "No keywords provided and no default keyword template configured in Settings")
+        check_type = payload.check_type if payload.check_type in ("organic", "maps", "both") else "both"
         full_name = " ".join(p for p in [payload.first_name, payload.last_name] if p).strip()
         location_query = _location_query_from(payload.city, payload.state, payload.zip)
 
@@ -1579,13 +1613,14 @@ def create_app(static_dir: str) -> FastAPI:
         db.flush()
 
         scan = m.RankCheckScan(
-            business_id=biz.id, website=website, location_query=location_query, status="running",
+            business_id=biz.id, website=website, location_query=location_query,
+            check_type=check_type, status="running",
         )
         db.add(scan)
         db.commit()
         db.refresh(scan)
 
-        _run_keyword_checks(scan.id, business_name, website, location_query, keywords, city=payload.city, state=payload.state)
+        _run_keyword_checks(scan.id, business_name, website, location_query, keywords, city=payload.city, state=payload.state, check_type=check_type)
 
         db.refresh(scan)
         keyword_results = (
@@ -2063,6 +2098,7 @@ def create_app(static_dir: str) -> FastAPI:
         keywords = [k.strip() for k in (payload.keywords or []) if k.strip()] or _default_rank_check_keywords(db)
         if not keywords:
             raise HTTPException(400, "At least one keyword is required (no default keyword template configured in Settings)")
+        check_type = payload.check_type if payload.check_type in ("organic", "maps", "both") else "both"
         full_name = " ".join(p for p in [payload.first_name, payload.last_name] if p).strip()
         location_query = _location_query_from(payload.city, payload.state, payload.zip)
 
@@ -2080,13 +2116,14 @@ def create_app(static_dir: str) -> FastAPI:
         db.flush()
 
         scan = m.RankCheckScan(
-            business_id=biz.id, website=website, location_query=location_query, status="running",
+            business_id=biz.id, website=website, location_query=location_query,
+            check_type=check_type, status="running",
         )
         db.add(scan)
         db.commit()
         db.refresh(scan)
 
-        _run_keyword_checks(scan.id, business_name, website, location_query, keywords, city=payload.city, state=payload.state)
+        _run_keyword_checks(scan.id, business_name, website, location_query, keywords, city=payload.city, state=payload.state, check_type=check_type)
 
         db.refresh(scan)
         keyword_results = (
@@ -2101,23 +2138,30 @@ def create_app(static_dir: str) -> FastAPI:
             "business_name": business_name,
             "website": website,
             "location_query": location_query,
+            "check_type": check_type,
             "status": scan.status,
             "error": scan.error_message,
             "keyword_results": [_keyword_result_brief(r) for r in keyword_results],
         }
 
     @api.get("/rank-checker/scans")
-    def list_rank_check_scans(lead_source: str | None = None, db: Session = Depends(get_db)):
+    def list_rank_check_scans(lead_source: str | None = None, check_type: str | None = None,
+                               db: Session = Depends(get_db)):
         """Flat list of RankCheckScan rows (joined with Business) --
         backs the Rank Checker GHL Leads page and the Manual Scoring
         page's persisted history list. `lead_source` filters to one of
         "rank_checker_manual" / "rank_checker_ghl" / "rank_checker_csv";
-        omit for everything (used by the dashboard overview)."""
+        `check_type` filters to "organic" / "maps" / "both" so a "Map
+        rank report" or "Organic rank report" can be pulled independently
+        of the combined view; omit either for everything (used by the
+        dashboard overview)."""
         query = db.query(m.RankCheckScan).options(
             joinedload(m.RankCheckScan.business), joinedload(m.RankCheckScan.keyword_results)
         )
         if lead_source:
             query = query.join(m.Business).filter(m.Business.lead_source == lead_source)
+        if check_type in ("organic", "maps", "both"):
+            query = query.filter(m.RankCheckScan.check_type == check_type)
         scans = query.order_by(m.RankCheckScan.created_at.desc()).all()
         return [_rank_check_scan_brief(s) for s in scans]
 
@@ -2147,6 +2191,10 @@ def create_app(static_dir: str) -> FastAPI:
         for s in scans:
             src = (s.business.lead_source if s.business else None) or "unknown"
             by_source[src] = by_source.get(src, 0) + 1
+        by_check_type: dict[str, int] = {}
+        for s in scans:
+            ct = s.check_type or "both"
+            by_check_type[ct] = by_check_type.get(ct, 0) + 1
         total_keywords = sum(len(s.keyword_results) for s in scans)
         organic_found = sum(1 for s in scans for r in s.keyword_results if r.organic_position)
         map_pack_found = sum(1 for s in scans for r in s.keyword_results if r.map_pack_found)
@@ -2158,12 +2206,14 @@ def create_app(static_dir: str) -> FastAPI:
             "organic_found_count": organic_found,
             "map_pack_found_count": map_pack_found,
             "by_source": by_source,
+            "by_check_type": by_check_type,
             "recent": [_rank_check_scan_brief(s) for s in scans[:10]],
         }
 
     @api.post("/rank-checker/upload")
     async def rank_checker_upload(
-        file: UploadFile = File(...), keywords: str = "", db: Session = Depends(get_db),
+        file: UploadFile = File(...), keywords: str = "", check_type: str = "both",
+        db: Session = Depends(get_db),
     ):
         """Accepts a lead-list CSV/Excel file plus a `keywords` form field
         (comma-separated -- the keyword list to apply to every row in
@@ -2172,13 +2222,18 @@ def create_app(static_dir: str) -> FastAPI:
         kicks off a background job. Mirrors /local-visibility/upload's
         shape exactly, just against Serper instead of Advice Local. Falls
         back to the default keyword template (Settings) if `keywords` is
-        blank."""
+        blank. `check_type` ("organic" | "maps" | "both", default "both")
+        applies to the whole batch -- lets a campaign designated for one
+        upload run only the check it needs (e.g. a Maps-only outreach
+        list never burns organic Serper calls)."""
         MAX_BULK_BYTES = 20 * 1024 * 1024
         contents = await file.read(MAX_BULK_BYTES + 1)
         if not contents:
             raise HTTPException(400, "Empty file")
         if len(contents) > MAX_BULK_BYTES:
             raise HTTPException(413, "File too large (max 20 MB)")
+
+        check_type = check_type if check_type in ("organic", "maps", "both") else "both"
 
         kw_list = [k.strip() for k in (keywords or "").split(",") if k.strip()]
         if not kw_list:
@@ -2227,10 +2282,11 @@ def create_app(static_dir: str) -> FastAPI:
         threading.Thread(
             target=_run_rank_check_job,
             args=(job.id, fieldnames, rows, cols, kw_list),
+            kwargs={"check_type": check_type},
             daemon=True,
         ).start()
 
-        return {"job_id": job.id, "status": "running", "total_rows": job.total_rows, "keywords": kw_list}
+        return {"job_id": job.id, "status": "running", "total_rows": job.total_rows, "keywords": kw_list, "check_type": check_type}
 
     @api.get("/rank-checker/jobs")
     def list_rank_checker_jobs(db: Session = Depends(get_db)):

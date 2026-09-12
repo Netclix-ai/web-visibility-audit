@@ -53,6 +53,12 @@ WVA.views.rankChecker = async function (main) {
         ${Object.entries(bySource).map(([src, n]) => `<span class="chip">${U.esc(sourceLabel[src] || src)}: ${n}</span>`).join('')}
     </div>`;
 
+    const byCheckType = overview.by_check_type || {};
+    const checkTypeLabel = { both: 'Organic + Map Pack', organic: 'Organic only', maps: 'Map Pack only' };
+    const checkTypeBar = `<div class="mt-8" style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${Object.entries(byCheckType).map(([ct, n]) => `<span class="chip">${U.esc(checkTypeLabel[ct] || ct)}: ${n}</span>`).join('')}
+    </div>`;
+
     const recent = overview.recent || [];
     const rows = recent.map((s) => {
         const status = s.status === 'completed'
@@ -74,6 +80,7 @@ WVA.views.rankChecker = async function (main) {
         <div class="logo-upload-title">Overview</div>
         ${statCards}
         ${sourceBar}
+        ${checkTypeBar}
     </div>
     <div class="card card-pad mt-16">
         <div class="logo-upload-title">Recent Activity</div>

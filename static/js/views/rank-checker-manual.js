@@ -82,6 +82,18 @@ WVA.views.rankCheckerManual = async function (main) {
                     <div id="rc-keyword-rows" class="mt-8" style="display:flex;flex-direction:column;gap:8px;"></div>
                     <button type="button" class="btn btn-secondary btn-sm mt-8" id="rc-add-keyword">+ Add keyword</button>
                 </div>
+                <div class="mt-16">
+                    <label class="label" for="rc-check_type">Check Type</label>
+                    <div class="text-sm muted mt-8">
+                        Run only the Organic (Google web results) check, only the Map Pack
+                        (Google Maps local pack) check, or both at once.
+                    </div>
+                    <select class="input mt-8" id="rc-check_type" name="check_type" style="max-width:220px;">
+                        <option value="both">Organic + Map Pack</option>
+                        <option value="organic">Organic only</option>
+                        <option value="maps">Map Pack only</option>
+                    </select>
+                </div>
                 <div class="form-actions mt-16">
                     <button type="submit" class="btn btn-primary" id="rc-single-btn">Run Check</button>
                 </div>
@@ -89,7 +101,15 @@ WVA.views.rankCheckerManual = async function (main) {
             <div id="rc-single-result" class="mt-16"></div>
         </div>
         <div class="card card-pad mt-16">
-            <div class="logo-upload-title">Past Manual Checks</div>
+            <div class="logo-upload-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <span>Past Manual Checks</span>
+                <select class="input" id="rc-history-filter" style="max-width:200px;">
+                    <option value="">All check types</option>
+                    <option value="both">Organic + Map Pack</option>
+                    <option value="organic">Organic only</option>
+                    <option value="maps">Map Pack only</option>
+                </select>
+            </div>
             <div id="rc-history-holder" class="mt-8">${U.loading('Loading history…')}</div>
         </div>`;
     }
@@ -139,6 +159,7 @@ WVA.views.rankCheckerManual = async function (main) {
                 first_name: (fd.get('first_name') || '').toString().trim() || null,
                 last_name: (fd.get('last_name') || '').toString().trim() || null,
                 keywords: keywords.length ? keywords : null,
+                check_type: (fd.get('check_type') || 'both').toString(),
             };
             btn.disabled = true;
             const prevLabel = btn.textContent;
@@ -172,12 +193,21 @@ WVA.views.rankCheckerManual = async function (main) {
         }
         return `<div class="card card-pad">
             <div class="logo-upload-title">Results for ${U.esc(res.business_name || '')}</div>
-            <div class="text-sm muted mt-8">${U.esc(res.location_query || '')}</div>
-            ${keywordResultsTable(res.keyword_results || [])}
+            <div class="text-sm muted mt-8">${U.esc(res.location_query || '')} · ${checkTypeLabel(res.check_type)}</div>
+            ${keywordResultsTable(res.keyword_results || [], res.check_type)}
         </div>`;
     }
 
-    function keywordResultsTable(results) {
+    function checkTypeLabel(checkType) {
+        if (checkType === 'organic') return 'Organic only';
+        if (checkType === 'maps') return 'Map Pack only';
+        return 'Organic + Map Pack';
+    }
+
+    function keywordResultsTable(results, checkType) {
+        checkType = checkType || 'both';
+        const showOrganic = checkType === 'organic' || checkType === 'both';
+        const showMaps = checkType === 'maps' || checkType === 'both';
         if (!results.length) return '<div class="text-sm muted mt-8">No keyword results.</div>';
         const rows = results.map((r) => {
             const organic = r.organic_position
@@ -188,13 +218,13 @@ WVA.views.rankCheckerManual = async function (main) {
                 : '<span class="muted">Not found</span>';
             return `<tr>
                 <td>${U.esc(r.keyword)}</td>
-                <td>${organic}</td>
-                <td>${mapPack}</td>
+                ${showOrganic ? `<td>${organic}</td>` : ''}
+                ${showMaps ? `<td>${mapPack}</td>` : ''}
             </tr>`;
         }).join('');
         return `<div class="table-wrap mt-8">
             <table class="table">
-                <thead><tr><th>Keyword</th><th>Organic Rank</th><th>Map Pack Rank</th></tr></thead>
+                <thead><tr><th>Keyword</th>${showOrganic ? '<th>Organic Rank</th>' : ''}${showMaps ? '<th>Map Pack Rank</th>' : ''}</tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>`;
@@ -203,9 +233,13 @@ WVA.views.rankCheckerManual = async function (main) {
     async function refreshHistory() {
         const holder = main.querySelector('#rc-history-holder');
         if (!holder) return;
+        const filterEl = main.querySelector('#rc-history-filter');
+        const checkTypeFilter = filterEl ? filterEl.value : '';
+        let url = '/api/rank-checker/scans?lead_source=rank_checker_manual';
+        if (checkTypeFilter) url += `&check_type=${encodeURIComponent(checkTypeFilter)}`;
         let scans;
         try {
-            scans = await WVA.api.get('/api/rank-checker/scans?lead_source=rank_checker_manual');
+            scans = await WVA.api.get(url);
         } catch (e) {
             holder.innerHTML = U.errorState(e);
             return;
@@ -230,6 +264,7 @@ WVA.views.rankCheckerManual = async function (main) {
             return `<tr>
                 <td>${U.esc(s.business_name || '—')}</td>
                 <td>${U.esc(s.website || '—')}</td>
+                <td>${U.esc(checkTypeLabel(s.check_type))}</td>
                 <td class="tabular">${s.keyword_count}</td>
                 <td class="tabular">${s.found_count}</td>
                 <td>${status}</td>
@@ -239,13 +274,17 @@ WVA.views.rankCheckerManual = async function (main) {
         }).join('');
         holder.innerHTML = `<div class="table-wrap">
             <table class="table">
-                <thead><tr><th>Business</th><th>Website</th><th>Keywords</th><th>Found</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Business</th><th>Website</th><th>Check Type</th><th>Keywords</th><th>Found</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>`;
         holder.querySelectorAll('.rc-hist-view').forEach((btn) => {
             btn.addEventListener('click', () => openReportModal(btn.dataset.bizName, btn.dataset.scanId));
         });
+        if (filterEl && !filterEl.dataset.wired) {
+            filterEl.dataset.wired = '1';
+            filterEl.addEventListener('change', () => refreshHistory());
+        }
     }
 
     async function openReportModal(businessName, scanId) {
@@ -268,7 +307,7 @@ WVA.views.rankCheckerManual = async function (main) {
         const content = overlay.querySelector('[data-report-content]');
         try {
             const scan = await WVA.api.get(`/api/rank-checker/scans/${scanId}`);
-            content.innerHTML = keywordResultsTable(scan.keyword_results || []);
+            content.innerHTML = keywordResultsTable(scan.keyword_results || [], scan.check_type);
         } catch (e) {
             content.innerHTML = U.errorState(e);
         }

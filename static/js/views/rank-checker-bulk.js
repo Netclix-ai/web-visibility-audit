@@ -48,6 +48,18 @@ WVA.views.rankCheckerBulk = async function (main) {
                 </div>
             </div>
             <div class="mt-16">
+                <label class="label" for="rc-bulk-check-type">Check Type</label>
+                <div class="text-sm muted mt-8">
+                    Applies to the whole list — run Organic only, Map Pack only, or both for
+                    every row in this upload.
+                </div>
+                <select class="input mt-8" id="rc-bulk-check-type" style="max-width:220px;">
+                    <option value="both">Organic + Map Pack</option>
+                    <option value="organic">Organic only</option>
+                    <option value="maps">Map Pack only</option>
+                </select>
+            </div>
+            <div class="mt-16">
                 <input type="file" id="rc-file" accept=".csv,.xlsx" hidden>
                 <button type="button" class="btn btn-primary" id="rc-upload-btn">
                     <span data-icon="upload" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>Upload File
@@ -70,6 +82,7 @@ WVA.views.rankCheckerBulk = async function (main) {
                 const fd = new FormData();
                 fd.append('file', file);
                 fd.append('keywords', (main.querySelector('#rc-bulk-keywords').value || '').trim());
+                fd.append('check_type', (main.querySelector('#rc-bulk-check-type').value || 'both'));
                 /* NOTE: deliberately no Content-Type header — the browser must
                    set the multipart boundary. Raw fetch (not WVA.api, which
                    forces a JSON content-type whenever a body is present). */
