@@ -29,6 +29,7 @@ from emailer import send_email
 from email_templates import lead_report_email, lead_notification_email, full_audit_email
 import ghl_client
 import advicelocal_client
+import serper_client
 
 
 def _run_audit_in_background(audit_id: str) -> None:
@@ -512,6 +513,247 @@ def _run_local_visibility_job(job_id: str, fieldnames: list[str], rows: list[dic
                 job.completed_at = datetime.now(timezone.utc)
 
 
+# ---------------- Rank Checker (Serper.dev) ----------------
+# Keyword rank checks (organic Google position + Google Map Pack position)
+# for a business, built the same way for the manual single-check form, a
+# bulk CSV/Excel upload, and the GHL webhook: each keyword gets combined
+# with the business's own location ("<keyword> <city>, <state>" or
+# "<keyword> <zip>") since Map Pack results are hyperlocal, per keyword
+# results are stored as RankCheckKeywordResult rows. See serper_client.py.
+
+RANK_CHECK_MAX_WORKERS = 4  # each row makes 2 Serper calls per keyword
+# (organic + maps), sequentially per keyword within a row -- capped lower
+# than website-audit's 8 workers to avoid bursting Serper's rate limit
+# across a large bulk job.
+
+_rank_check_progress_lock = threading.Lock()
+
+
+def _default_rank_check_keywords(db: Session) -> list[str]:
+    settings = db.query(m.RankCheckSettings).first()
+    if not settings or not settings.default_keywords:
+        return []
+    return [k.strip() for k in settings.default_keywords.split(",") if k.strip()]
+
+
+def _location_query_from(city: str | None, state: str | None, zip_code: str | None) -> str:
+    parts = [p for p in [city, state] if p]
+    if parts:
+        return ", ".join(parts)
+    return zip_code or ""
+
+
+def _keyword_result_brief(r: "m.RankCheckKeywordResult") -> dict:
+    return {
+        "id": r.id,
+        "keyword": r.keyword,
+        "query": r.query,
+        "organic_position": r.organic_position,
+        "organic_url": r.organic_url,
+        "map_pack_position": r.map_pack_position,
+        "map_pack_found": r.map_pack_found,
+        "raw_organic": json.loads(r.raw_organic) if r.raw_organic else None,
+        "raw_maps": json.loads(r.raw_maps) if r.raw_maps else None,
+        "error_message": r.error_message,
+    }
+
+
+def _rank_check_scan_brief(scan: "m.RankCheckScan") -> dict:
+    biz = scan.business
+    results = scan.keyword_results
+    found_count = sum(1 for r in results if r.organic_position or r.map_pack_found)
+    return {
+        "id": scan.id,
+        "business_id": scan.business_id,
+        "business_name": biz.name if biz else None,
+        "contact_name": biz.contact_name if biz else None,
+        "contact_email": biz.contact_email if biz else None,
+        "phone": biz.phone if biz else None,
+        "lead_source": biz.lead_source if biz else None,
+        "website": scan.website,
+        "location_query": scan.location_query,
+        "status": scan.status,
+        "error_message": scan.error_message,
+        "keyword_count": len(results),
+        "found_count": found_count,
+        "created_at": scan.created_at.isoformat() if scan.created_at else None,
+        "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+    }
+
+
+def _run_keyword_checks(scan_id: str, business_name: str, website: str, location_query: str,
+                         keywords: list[str]) -> None:
+    """Runs each keyword against Serper's /search (organic) and /maps
+    (Map Pack), writing one RankCheckKeywordResult row per keyword, then
+    marks the scan completed/failed. Opens its own DB sessions
+    (session_scope) so it works identically whether called from the main
+    request thread (manual single-check, GHL webhook) or a bulk-upload
+    worker thread. Never raises -- a per-keyword Serper failure just
+    leaves that keyword's positions null with an error_message, so one
+    bad keyword can't abort the whole scan."""
+    any_success = False
+    last_error = None
+    for kw in keywords:
+        kw = (kw or "").strip()
+        if not kw:
+            continue
+        query = f"{kw} {location_query}".strip()
+        organic, err1 = serper_client.search_organic(query)
+        maps_places, err2 = serper_client.search_maps(query)
+        organic = organic or []
+        maps_places = maps_places or []
+        organic_position, organic_url = (
+            serper_client.find_organic_position(organic, website) if website else (None, None)
+        )
+        map_pack_position = serper_client.find_map_pack_position(maps_places, business_name)
+        error_message = None
+        if err1 and err2:
+            error_message = err1 or err2
+            last_error = error_message
+        else:
+            any_success = True
+        with session_scope() as db:
+            db.add(m.RankCheckKeywordResult(
+                scan_id=scan_id, keyword=kw, query=query,
+                organic_position=organic_position, organic_url=organic_url,
+                map_pack_position=map_pack_position, map_pack_found=map_pack_position is not None,
+                raw_organic=json.dumps(organic[:10]) if organic else None,
+                raw_maps=json.dumps(maps_places[:10]) if maps_places else None,
+                error_message=error_message,
+            ))
+    with session_scope() as db:
+        scan = db.get(m.RankCheckScan, scan_id)
+        if scan:
+            if any_success or not last_error:
+                scan.status = "completed"
+            else:
+                scan.status = "failed"
+                scan.error_message = last_error
+            scan.completed_at = datetime.now(timezone.utc)
+
+
+def _process_rank_check_row(row: dict, cols: dict, keywords: list[str]) -> dict:
+    """Runs a rank check for one CSV row, returning the row dict with
+    per-keyword columns appended (e.g. "tree trimming - Organic Rank",
+    "tree trimming - Map Pack Rank"). Never raises -- any per-row problem
+    (missing name/website) just leaves those columns blank."""
+    out = dict(row)
+    for kw in keywords:
+        out[f"{kw} - Organic Rank"] = ""
+        out[f"{kw} - Map Pack Rank"] = ""
+
+    business_name = (row.get(cols["name"]) or "").strip() if cols["name"] else ""
+    website = (row.get(cols["website"]) or "").strip() if cols["website"] else ""
+    if not business_name or not website:
+        return out
+
+    street = (row.get(cols["street"]) or "").strip() if cols["street"] else ""
+    city = (row.get(cols["city"]) or "").strip() if cols["city"] else ""
+    state = (row.get(cols["state"]) or "").strip() if cols["state"] else ""
+    zip_code = (row.get(cols["zip"]) or "").strip() if cols["zip"] else ""
+    phone = (row.get(cols["phone"]) or "").strip() if cols["phone"] else ""
+    email = (row.get(cols["email"]) or "").strip() if cols["email"] else ""
+    first_name = (row.get(cols["first_name"]) or "").strip() if cols["first_name"] else ""
+    last_name = (row.get(cols["last_name"]) or "").strip() if cols["last_name"] else ""
+    contact_name = " ".join(p for p in [first_name, last_name] if p).strip()
+    location_query = _location_query_from(city, state, zip_code)
+
+    try:
+        with session_scope() as db:
+            biz = m.Business(
+                name=business_name,
+                location=location_query or None,
+                contact_name=contact_name or None,
+                contact_email=email or None,
+                first_name=first_name or None,
+                last_name=last_name or None,
+                phone=phone or None,
+                lead_source="rank_checker_csv",
+            )
+            db.add(biz)
+            db.flush()
+            scan = m.RankCheckScan(
+                business_id=biz.id, website=website, location_query=location_query, status="running",
+            )
+            db.add(scan)
+            db.flush()
+            scan_id = scan.id
+
+        _run_keyword_checks(scan_id, business_name, website, location_query, keywords)
+
+        with session_scope() as db:
+            results = (
+                db.query(m.RankCheckKeywordResult)
+                .filter_by(scan_id=scan_id)
+                .all()
+            )
+            for r in results:
+                if r.organic_position:
+                    out[f"{r.keyword} - Organic Rank"] = str(r.organic_position)
+                if r.map_pack_found:
+                    out[f"{r.keyword} - Map Pack Rank"] = str(r.map_pack_position)
+    except Exception as e:
+        print(f"[rank_checker] row failed for {business_name}: {e}")
+    return out
+
+
+def _run_rank_check_job(job_id: str, fieldnames: list[str], rows: list[dict], cols: dict,
+                         keywords: list[str]) -> None:
+    try:
+        n = len(rows)
+        out_rows: list[dict | None] = [None] * n
+        processed = 0
+
+        def _bump_progress():
+            nonlocal processed
+            with _rank_check_progress_lock:
+                processed += 1
+                current = processed
+                with session_scope() as db:
+                    job = db.get(m.BulkUploadJob, job_id)
+                    if job:
+                        job.processed_rows = current
+
+        def _work(i: int, row: dict) -> None:
+            out_rows[i] = _process_rank_check_row(row, cols, keywords)
+            _bump_progress()
+
+        max_workers = min(RANK_CHECK_MAX_WORKERS, n) or 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_work, i, row) for i, row in enumerate(rows)]
+            for f in futures:
+                f.result()
+
+        extra_cols = []
+        for kw in keywords:
+            extra_cols.append(f"{kw} - Organic Rank")
+            extra_cols.append(f"{kw} - Map Pack Rank")
+        out_fieldnames = list(fieldnames) + extra_cols
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=out_fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for r in out_rows:
+            writer.writerow(r)
+        csv_bytes = buf.getvalue().encode("utf-8")
+
+        with session_scope() as db:
+            job = db.get(m.BulkUploadJob, job_id)
+            if job:
+                base, _ext = os.path.splitext(job.filename or "leads.csv")
+                job.result_filename = f"{base}_ranked.csv"
+                job.result_csv = csv_bytes
+                job.status = "completed"
+                job.completed_at = datetime.now(timezone.utc)
+    except Exception as e:
+        print(f"[rank_checker] job {job_id} failed: {e}")
+        with session_scope() as db:
+            job = db.get(m.BulkUploadJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error_message = str(e)
+                job.completed_at = datetime.now(timezone.utc)
+
+
 # ---------- Request bodies ----------
 
 class BusinessCreate(BaseModel):
@@ -634,6 +876,50 @@ class LocalVisibilitySingleRequest(BaseModel):
     email: str | None = None
     phone: str | None = None
     website: str | None = None
+
+
+class RankCheckSingleRequest(BaseModel):
+    """Body shape for the Rank Checker manual-check form. business_name +
+    website are hard requirements (website's domain is what organic
+    results are matched against); city/state/zip build the location
+    string appended to each keyword ("<keyword> <city>, <state>"), since
+    Map Pack results are hyperlocal. `keywords` is optional -- if omitted
+    or empty, falls back to the default keyword template in
+    RankCheckSettings (Settings page)."""
+    business_name: str
+    website: str
+    street: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    keywords: list[str] | None = None
+
+
+class GHLRankCheckRequest(BaseModel):
+    """Rank Checker counterpart of GHLAuditRequest/GHLLocalVisibilityRequest.
+    `keywords` is optional -- if the GHL workflow doesn't map a keyword
+    list, the default keyword template from RankCheckSettings is used, so
+    a bulk GHL automation can run with zero per-contact keyword config."""
+    contact_id: str
+    business_name: str
+    website: str
+    street: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    keywords: list[str] | None = None
+
+
+class RankCheckSettingsUpdate(BaseModel):
+    default_keywords: list[str]
 
 
 def _normalize_url(url: str) -> str:
@@ -809,7 +1095,8 @@ def create_app(static_dir: str) -> FastAPI:
             query = query.filter(m.Business.lead_source == lead_source)
         else:
             query = query.filter(m.Business.lead_source.notin_(
-                ["ghl", "csv_bulk", "local_visibility_csv", "local_visibility_ghl", "local_visibility_manual"]
+                ["ghl", "csv_bulk", "local_visibility_csv", "local_visibility_ghl", "local_visibility_manual",
+                 "rank_checker_csv", "rank_checker_ghl", "rank_checker_manual"]
             ))
         businesses = query.order_by(m.Business.created_at.desc()).all()
         results = []
@@ -1230,7 +1517,85 @@ def create_app(static_dir: str) -> FastAPI:
         ghl_client.post_audit_result(result)
         return result
 
-    # ---------------- Public Lead-Gen Widget ----------------
+    @api.post("/integrations/ghl/rank-check-request")
+    def ghl_rank_check_request(payload: GHLRankCheckRequest, request: Request, db: Session = Depends(get_db)):
+        """Rank Checker counterpart of the GHL audit-request webhooks
+        above. Creates/reuses a Business (idempotent on ghl_contact_id,
+        same pattern), builds a location string from city/state/zip, runs
+        each keyword (payload.keywords, or the default keyword template
+        from RankCheckSettings if omitted -- see _default_rank_check_keywords)
+        against Serper's organic + Maps APIs, then POSTs the result back
+        to GHL's Inbound Webhook Trigger URL the same way the other GHL
+        routes do. Runs synchronously -- fine for a workflow action, not a
+        page load; total time is roughly len(keywords) * ~2-4s (two
+        sequential Serper calls per keyword).
+
+        Auth: same shared-secret check as the other GHL routes."""
+        expected_secret = os.environ.get("GHL_INBOUND_SECRET")
+        if expected_secret and request.headers.get("x-ghl-secret") != expected_secret:
+            raise HTTPException(401, "Invalid or missing webhook secret")
+
+        business_name = payload.business_name.strip()
+        website = (payload.website or "").strip()
+        if not business_name or not website:
+            raise HTTPException(400, "business_name and website are required")
+        keywords = [k.strip() for k in (payload.keywords or []) if k.strip()] or _default_rank_check_keywords(db)
+        if not keywords:
+            raise HTTPException(400, "No keywords provided and no default keyword template configured in Settings")
+        full_name = " ".join(p for p in [payload.first_name, payload.last_name] if p).strip()
+        location_query = _location_query_from(payload.city, payload.state, payload.zip)
+
+        biz = db.query(m.Business).filter_by(ghl_contact_id=payload.contact_id).first()
+        if biz:
+            biz.name = business_name
+            biz.location = location_query or biz.location
+            biz.contact_name = full_name or biz.contact_name
+            biz.contact_email = payload.email or biz.contact_email
+            biz.first_name = payload.first_name or biz.first_name
+            biz.last_name = payload.last_name or biz.last_name
+            biz.phone = payload.phone or biz.phone
+        else:
+            biz = m.Business(
+                name=business_name,
+                location=location_query or None,
+                contact_name=full_name or None,
+                contact_email=payload.email,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                phone=payload.phone,
+                lead_source="rank_checker_ghl",
+                ghl_contact_id=payload.contact_id,
+            )
+            db.add(biz)
+        db.flush()
+
+        scan = m.RankCheckScan(
+            business_id=biz.id, website=website, location_query=location_query, status="running",
+        )
+        db.add(scan)
+        db.commit()
+        db.refresh(scan)
+
+        _run_keyword_checks(scan.id, business_name, website, location_query, keywords)
+
+        db.refresh(scan)
+        keyword_results = (
+            db.query(m.RankCheckKeywordResult)
+            .filter_by(scan_id=scan.id)
+            .order_by(m.RankCheckKeywordResult.created_at)
+            .all()
+        )
+        result = {
+            "contact_id": payload.contact_id,
+            "success": scan.status == "completed",
+            "status": scan.status,
+            "error": scan.error_message,
+            "keyword_results": [_keyword_result_brief(r) for r in keyword_results],
+        }
+        ghl_client.post_audit_result(result)
+        return result
+
+
 
     @api.post("/widget/audit")
     def widget_audit(payload: WidgetAuditRequest, request: Request, db: Session = Depends(get_db)):
@@ -1659,6 +2024,247 @@ def create_app(static_dir: str) -> FastAPI:
         rows = [dict(r) for r in reader]
         return {"columns": columns, "rows": rows}
 
+    # ---------------- Rank Checker (Serper.dev) ----------------
+
+    @api.get("/rank-checker/settings")
+    def get_rank_checker_settings(db: Session = Depends(get_db)):
+        return {"default_keywords": _default_rank_check_keywords(db)}
+
+    @api.put("/rank-checker/settings")
+    def update_rank_checker_settings(payload: RankCheckSettingsUpdate, db: Session = Depends(get_db)):
+        settings = db.query(m.RankCheckSettings).first()
+        if not settings:
+            settings = m.RankCheckSettings()
+            db.add(settings)
+        settings.default_keywords = ",".join(k.strip() for k in payload.default_keywords if k.strip())
+        db.commit()
+        return {"default_keywords": _default_rank_check_keywords(db)}
+
+    @api.post("/rank-checker/single")
+    def rank_checker_single(payload: RankCheckSingleRequest, db: Session = Depends(get_db)):
+        """One-off check for the Rank Checker manual form. Creates a real
+        Business + RankCheckScan (lead_source="rank_checker_manual", also
+        excluded from the main dashboard list -- see list_businesses),
+        runs synchronously since Serper is fast (a few seconds per
+        keyword)."""
+        business_name = payload.business_name.strip()
+        website = payload.website.strip()
+        if not business_name or not website:
+            raise HTTPException(400, "Business name and website are required")
+        keywords = [k.strip() for k in (payload.keywords or []) if k.strip()] or _default_rank_check_keywords(db)
+        if not keywords:
+            raise HTTPException(400, "At least one keyword is required (no default keyword template configured in Settings)")
+        full_name = " ".join(p for p in [payload.first_name, payload.last_name] if p).strip()
+        location_query = _location_query_from(payload.city, payload.state, payload.zip)
+
+        biz = m.Business(
+            name=business_name,
+            location=location_query or None,
+            contact_name=full_name or None,
+            contact_email=payload.email,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            phone=payload.phone,
+            lead_source="rank_checker_manual",
+        )
+        db.add(biz)
+        db.flush()
+
+        scan = m.RankCheckScan(
+            business_id=biz.id, website=website, location_query=location_query, status="running",
+        )
+        db.add(scan)
+        db.commit()
+        db.refresh(scan)
+
+        _run_keyword_checks(scan.id, business_name, website, location_query, keywords)
+
+        db.refresh(scan)
+        keyword_results = (
+            db.query(m.RankCheckKeywordResult)
+            .filter_by(scan_id=scan.id)
+            .order_by(m.RankCheckKeywordResult.created_at)
+            .all()
+        )
+        return {
+            "business_id": biz.id,
+            "scan_id": scan.id,
+            "business_name": business_name,
+            "website": website,
+            "location_query": location_query,
+            "status": scan.status,
+            "error": scan.error_message,
+            "keyword_results": [_keyword_result_brief(r) for r in keyword_results],
+        }
+
+    @api.get("/rank-checker/scans")
+    def list_rank_check_scans(lead_source: str | None = None, db: Session = Depends(get_db)):
+        """Flat list of RankCheckScan rows (joined with Business) --
+        backs the Rank Checker GHL Leads page and the Manual Scoring
+        page's persisted history list. `lead_source` filters to one of
+        "rank_checker_manual" / "rank_checker_ghl" / "rank_checker_csv";
+        omit for everything (used by the dashboard overview)."""
+        query = db.query(m.RankCheckScan).options(
+            joinedload(m.RankCheckScan.business), joinedload(m.RankCheckScan.keyword_results)
+        )
+        if lead_source:
+            query = query.join(m.Business).filter(m.Business.lead_source == lead_source)
+        scans = query.order_by(m.RankCheckScan.created_at.desc()).all()
+        return [_rank_check_scan_brief(s) for s in scans]
+
+    @api.get("/rank-checker/scans/{scan_id}")
+    def get_rank_check_scan(scan_id: str, db: Session = Depends(get_db)):
+        """Full scan detail including every keyword's result -- backs the
+        "View Report" modal (reload-safe after a page refresh, same
+        pattern as /local-visibility/scans/{id}/report)."""
+        scan = db.get(m.RankCheckScan, scan_id)
+        if not scan:
+            raise HTTPException(404, "Scan not found")
+        brief = _rank_check_scan_brief(scan)
+        brief["keyword_results"] = [_keyword_result_brief(r) for r in scan.keyword_results]
+        return brief
+
+    @api.get("/rank-checker/overview")
+    def rank_checker_overview(db: Session = Depends(get_db)):
+        """Summary stats for the Rank Checker Dashboard landing page."""
+        scans = (
+            db.query(m.RankCheckScan)
+            .options(joinedload(m.RankCheckScan.business), joinedload(m.RankCheckScan.keyword_results))
+            .order_by(m.RankCheckScan.created_at.desc())
+            .all()
+        )
+        completed = [s for s in scans if s.status == "completed"]
+        by_source: dict[str, int] = {}
+        for s in scans:
+            src = (s.business.lead_source if s.business else None) or "unknown"
+            by_source[src] = by_source.get(src, 0) + 1
+        total_keywords = sum(len(s.keyword_results) for s in scans)
+        organic_found = sum(1 for s in scans for r in s.keyword_results if r.organic_position)
+        map_pack_found = sum(1 for s in scans for r in s.keyword_results if r.map_pack_found)
+        return {
+            "total_scans": len(scans),
+            "completed_scans": len(completed),
+            "failed_scans": len([s for s in scans if s.status == "failed"]),
+            "total_keywords_checked": total_keywords,
+            "organic_found_count": organic_found,
+            "map_pack_found_count": map_pack_found,
+            "by_source": by_source,
+            "recent": [_rank_check_scan_brief(s) for s in scans[:10]],
+        }
+
+    @api.post("/rank-checker/upload")
+    async def rank_checker_upload(
+        file: UploadFile = File(...), keywords: str = "", db: Session = Depends(get_db),
+    ):
+        """Accepts a lead-list CSV/Excel file plus a `keywords` form field
+        (comma-separated -- the keyword list to apply to every row in
+        this upload, designated once for the whole list, per the user's
+        spec), auto-detects the business name + website columns, and
+        kicks off a background job. Mirrors /local-visibility/upload's
+        shape exactly, just against Serper instead of Advice Local. Falls
+        back to the default keyword template (Settings) if `keywords` is
+        blank."""
+        MAX_BULK_BYTES = 20 * 1024 * 1024
+        contents = await file.read(MAX_BULK_BYTES + 1)
+        if not contents:
+            raise HTTPException(400, "Empty file")
+        if len(contents) > MAX_BULK_BYTES:
+            raise HTTPException(413, "File too large (max 20 MB)")
+
+        kw_list = [k.strip() for k in (keywords or "").split(",") if k.strip()]
+        if not kw_list:
+            kw_list = _default_rank_check_keywords(db)
+        if not kw_list:
+            raise HTTPException(400, "No keywords provided and no default keyword template configured in Settings")
+
+        fieldnames, rows = _parse_bulk_upload_file(contents, file.filename or "")
+        if not fieldnames:
+            raise HTTPException(400, "Could not read a header row from this file.")
+
+        name_col = _find_column(fieldnames, NAME_HEADER_CANDIDATES)
+        website_col = _find_column(fieldnames, WEBSITE_HEADER_CANDIDATES)
+        if not name_col or not website_col:
+            raise HTTPException(
+                400,
+                f"Could not find both a Business Name and a Website column. Found columns: {', '.join(fieldnames)}. "
+                "Please include columns named Business Name (or Company/Name) and Website (or URL/Domain).",
+            )
+        cols = {
+            "name": name_col,
+            "website": website_col,
+            "street": _find_column(fieldnames, STREET_HEADER_CANDIDATES),
+            "city": _find_column(fieldnames, CITY_HEADER_CANDIDATES),
+            "state": _find_column(fieldnames, STATE_HEADER_CANDIDATES),
+            "zip": _find_column(fieldnames, ZIP_HEADER_CANDIDATES),
+            "phone": _find_column(fieldnames, PHONE_HEADER_CANDIDATES),
+            "email": _find_column(fieldnames, EMAIL_HEADER_CANDIDATES),
+            "first_name": _find_column(fieldnames, FIRST_NAME_HEADER_CANDIDATES),
+            "last_name": _find_column(fieldnames, LAST_NAME_HEADER_CANDIDATES),
+        }
+
+        rows = [dict(r) for r in rows]
+        if not rows:
+            raise HTTPException(400, "No data rows found in this file.")
+
+        job = m.BulkUploadJob(
+            job_type="rank_checker",
+            filename=file.filename or "upload.csv", status="running",
+            total_rows=len(rows), processed_rows=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        threading.Thread(
+            target=_run_rank_check_job,
+            args=(job.id, fieldnames, rows, cols, kw_list),
+            daemon=True,
+        ).start()
+
+        return {"job_id": job.id, "status": "running", "total_rows": job.total_rows, "keywords": kw_list}
+
+    @api.get("/rank-checker/jobs")
+    def list_rank_checker_jobs(db: Session = Depends(get_db)):
+        jobs = (
+            db.query(m.BulkUploadJob)
+            .filter(m.BulkUploadJob.job_type == "rank_checker")
+            .order_by(m.BulkUploadJob.created_at.desc())
+            .all()
+        )
+        return [_bulk_job_brief(j) for j in jobs]
+
+    @api.get("/rank-checker/jobs/{job_id}")
+    def get_rank_checker_job(job_id: str, db: Session = Depends(get_db)):
+        job = db.get(m.BulkUploadJob, job_id)
+        if not job or job.job_type != "rank_checker":
+            raise HTTPException(404, "Job not found")
+        return _bulk_job_brief(job)
+
+    @api.get("/rank-checker/jobs/{job_id}/download")
+    def download_rank_checker_job(job_id: str, db: Session = Depends(get_db)):
+        job = db.get(m.BulkUploadJob, job_id)
+        if not job or job.job_type != "rank_checker" or not job.result_csv:
+            raise HTTPException(404, "Result not ready yet")
+        filename = job.result_filename or "ranked_leads.csv"
+        return Response(
+            content=bytes(job.result_csv),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @api.get("/rank-checker/jobs/{job_id}/results")
+    def get_rank_checker_job_results(job_id: str, db: Session = Depends(get_db)):
+        job = db.get(m.BulkUploadJob, job_id)
+        if not job or job.job_type != "rank_checker":
+            raise HTTPException(404, "Job not found")
+        if not job.result_csv:
+            return {"columns": [], "rows": []}
+        text = bytes(job.result_csv).decode("utf-8", errors="replace")
+        reader = csv.DictReader(io.StringIO(text))
+        columns = reader.fieldnames or []
+        rows = [dict(r) for r in reader]
+        return {"columns": columns, "rows": rows}
+
     # ---------------- App wiring ----------------
 
     app = FastAPI(title="Website Visibility Audit")
@@ -1677,6 +2283,8 @@ def create_app(static_dir: str) -> FastAPI:
                 "views/ghl-leads.js", "views/bulk-scoring.js", "views/local-visibility.js",
                 "views/local-visibility-ghl-leads.js", "views/local-visibility-bulk.js",
                 "views/local-visibility-manual.js",
+                "views/rank-checker.js", "views/rank-checker-ghl-leads.js",
+                "views/rank-checker-bulk.js", "views/rank-checker-manual.js",
             ]
         }
         return templates.TemplateResponse(

@@ -124,6 +124,10 @@ def init_db():
         if db.query(m.BrandingConfig).count() == 0:
             db.add(m.BrandingConfig())
 
+        # Rank Checker default keyword template (single row)
+        if db.query(m.RankCheckSettings).count() == 0:
+            db.add(m.RankCheckSettings(default_keywords="tree trimming,stump removal,tree removal"))
+
     print("DB initialized and seeded.")
 
 

@@ -46,7 +46,7 @@ class Business(Base):
     first_name = Column(String)
     last_name = Column(String)
     phone = Column(String)
-    lead_source = Column(String, default="manual")  # "manual" | "widget" | "ghl" | "csv_bulk" | "local_visibility_csv" | "local_visibility_ghl" | "local_visibility_manual"
+    lead_source = Column(String, default="manual")  # "manual" | "widget" | "ghl" | "csv_bulk" | "local_visibility_csv" | "local_visibility_ghl" | "local_visibility_manual" | "rank_checker_csv" | "rank_checker_ghl" | "rank_checker_manual"
     ghl_contact_id = Column(String)  # GoHighLevel contact id, when lead_source == "ghl" (idempotency key)
     # Set when a prospect responds to the "Request Your Full Audit" CTA on
     # their prospect snapshot (widget results or public share link).
@@ -58,6 +58,7 @@ class Business(Base):
 
     websites = relationship("Website", back_populates="business", cascade="all, delete-orphan")
     local_visibility_scans = relationship("LocalVisibilityScan", back_populates="business", cascade="all, delete-orphan")
+    rank_check_scans = relationship("RankCheckScan", back_populates="business", cascade="all, delete-orphan")
 
 
 class BulkUploadJob(Base):
@@ -122,6 +123,70 @@ class LocalVisibilityScan(Base):
     completed_at = Column(DateTime(timezone=True))
 
     business = relationship("Business", back_populates="local_visibility_scans")
+
+
+class RankCheckSettings(Base):
+    """Singleton row (mirrors BrandingConfig's single-row pattern) holding
+    the default keyword template used when a bulk CSV/Excel upload or GHL
+    webhook request doesn't specify its own keyword list. Stored as a
+    comma-separated string (simplest shape for a short editable list in
+    the Settings UI) -- e.g. "tree trimming,stump removal,tree removal"."""
+    __tablename__ = "rank_check_settings"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    default_keywords = Column(Text, default="")  # comma-separated
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class RankCheckScan(Base):
+    """One on-demand keyword-rank-check run for a business (manual form,
+    one row of a bulk CSV/Excel upload, or a GHL webhook request). Mirrors
+    the role LocalVisibilityScan plays for Advice Local, but for
+    Serper.dev's Google Search/Maps APIs -- see serper_client.py. Each
+    scan checks N keywords (built from the scan's keyword list + the
+    business's own location, since Map Pack results are hyperlocal), with
+    the per-keyword results stored in RankCheckKeywordResult rows so the
+    UI can drill into organic position + Map Pack position per keyword."""
+    __tablename__ = "rank_check_scans"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    business_id = Column(String, ForeignKey("businesses.id"), nullable=False)
+    website = Column(String)  # domain used to match "your" organic result
+    location_query = Column(String)  # e.g. "Austin, TX" or a zip -- appended to each keyword
+    status = Column(String, default="running")  # running | completed | failed
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=now)
+    completed_at = Column(DateTime(timezone=True))
+
+    business = relationship("Business", back_populates="rank_check_scans")
+    keyword_results = relationship(
+        "RankCheckKeywordResult", back_populates="scan", cascade="all, delete-orphan",
+        order_by="RankCheckKeywordResult.created_at",
+    )
+
+
+class RankCheckKeywordResult(Base):
+    """One keyword's result within a RankCheckScan -- organic Google
+    position (matched by domain against the scan's `website`) and Google
+    Map Pack position (matched by business-name substring against the
+    Maps API's `places` results), plus a raw JSON snapshot of the top
+    results from each for drill-down in the "View Report" style modal."""
+    __tablename__ = "rank_check_keyword_results"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    scan_id = Column(String, ForeignKey("rank_check_scans.id"), nullable=False)
+    keyword = Column(String, nullable=False)
+    query = Column(String)  # the actual query text sent to Serper (keyword + location)
+    organic_position = Column(Integer)  # None = not found in the results checked
+    organic_url = Column(String)
+    map_pack_position = Column(Integer)
+    map_pack_found = Column(Boolean, default=False)
+    raw_organic = Column(Text)  # JSON: top organic results snapshot
+    raw_maps = Column(Text)  # JSON: top Map Pack results snapshot
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    scan = relationship("RankCheckScan", back_populates="keyword_results")
 
 
 class Website(Base):

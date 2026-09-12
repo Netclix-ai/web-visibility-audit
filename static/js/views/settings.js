@@ -4,7 +4,7 @@ WVA.views = WVA.views || {};
 
 WVA.views.settings = async function (main, params) {
     const U = WVA.ui;
-    const tab = ['branding', 'scoring', 'embed'].includes(params.tab) ? params.tab : 'branding';
+    const tab = ['branding', 'scoring', 'embed', 'rank-checker'].includes(params.tab) ? params.tab : 'branding';
     main.innerHTML = U.loading('Loading settings…');
 
     const tabsHtml = `
@@ -12,18 +12,72 @@ WVA.views.settings = async function (main, params) {
             <a class="tab-btn ${tab === 'branding' ? 'active' : ''}" role="tab" aria-selected="${tab === 'branding'}" href="#/settings/branding">Branding</a>
             <a class="tab-btn ${tab === 'scoring' ? 'active' : ''}" role="tab" aria-selected="${tab === 'scoring'}" href="#/settings/scoring">Scoring Weights</a>
             <a class="tab-btn ${tab === 'embed' ? 'active' : ''}" role="tab" aria-selected="${tab === 'embed'}" href="#/settings/embed">Embed Widget</a>
+            <a class="tab-btn ${tab === 'rank-checker' ? 'active' : ''}" role="tab" aria-selected="${tab === 'rank-checker'}" href="#/settings/rank-checker">Rank Checker</a>
         </div>`;
 
     main.innerHTML = U.pageHead({
         title: 'Settings',
-        sub: 'Agency branding for client-facing reports, lead-gen widget embedding, and scoring weights for future audits.',
+        sub: 'Agency branding for client-facing reports, lead-gen widget embedding, scoring weights for future audits, and the Rank Checker default keyword template.',
     }) + tabsHtml + `<div id="tab-body">${U.loading('Loading…')}</div>`;
 
     const body = main.querySelector('#tab-body');
     if (tab === 'branding') await renderBrandingTab(body);
     else if (tab === 'embed') renderEmbedTab(body);
+    else if (tab === 'rank-checker') await renderRankCheckerTab(body);
     else await renderScoringTab(body);
 };
+
+/* ---------- Rank Checker tab ---------- */
+async function renderRankCheckerTab(body) {
+    const U = WVA.ui;
+    let settings;
+    try {
+        settings = await WVA.api.get('/api/rank-checker/settings');
+    } catch (e) {
+        body.innerHTML = U.errorState(e);
+        return;
+    }
+    const keywords = settings.default_keywords || [];
+
+    body.innerHTML = `
+    <div class="note-card">
+        <span data-icon="info" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+        <span><strong>Default keyword template.</strong> Used by the Rank Checker's Bulk Scoring upload and GHL webhook when no keyword list is provided for a specific run (e.g. the manual check form pre-fills these, but you can add/remove keywords per check). Each keyword is combined with a business's own city/state or zip to build a location-based search, since Google Map Pack results are hyperlocal.</span>
+    </div>
+    <form id="rank-checker-settings-form" class="card card-pad form-card mt-16">
+        <div class="logo-upload-title">Default Keywords</div>
+        <div id="rc-settings-keyword-rows" class="mt-16" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <button type="button" class="btn btn-secondary btn-sm mt-8" id="rc-settings-add-keyword">+ Add keyword</button>
+        <div class="form-actions mt-16">
+            <button type="submit" class="btn btn-primary">Save Keywords</button>
+        </div>
+    </form>`;
+
+    const rowsHolder = body.querySelector('#rc-settings-keyword-rows');
+    function addRow(value) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;align-items:center;';
+        row.innerHTML = `<input class="input rc-settings-keyword-input" type="text" placeholder="e.g. tree trimming" value="${U.esc(value || '')}" style="flex:1;">
+            <button type="button" class="btn btn-secondary btn-sm rc-settings-remove-keyword">Remove</button>`;
+        row.querySelector('.rc-settings-remove-keyword').addEventListener('click', () => row.remove());
+        rowsHolder.appendChild(row);
+    }
+    (keywords.length ? keywords : ['', '', '']).forEach(addRow);
+    body.querySelector('#rc-settings-add-keyword').addEventListener('click', () => addRow(''));
+
+    body.querySelector('#rank-checker-settings-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const values = Array.from(body.querySelectorAll('.rc-settings-keyword-input'))
+            .map((el) => el.value.trim())
+            .filter(Boolean);
+        try {
+            await WVA.api.put('/api/rank-checker/settings', { default_keywords: values });
+            U.toast('Default keywords saved.', 'success');
+        } catch (err) {
+            U.toast(err.message || 'Could not save keywords.', 'error');
+        }
+    });
+}
 
 /* ---------- Branding tab ---------- */
 async function renderBrandingTab(body) {

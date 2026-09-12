@@ -13,11 +13,15 @@
         { re: /^\/local-visibility\/ghl-leads$/, view: 'localVisibilityGhlLeads', nav: 'local-visibility-ghl-leads' },
         { re: /^\/local-visibility\/bulk-scoring$/, view: 'localVisibilityBulk', nav: 'local-visibility-bulk-scoring' },
         { re: /^\/local-visibility\/manual$/, view: 'localVisibilityManual', nav: 'local-visibility-manual' },
+        { re: /^\/rank-checker$/, view: 'rankChecker', nav: 'rank-checker' },
+        { re: /^\/rank-checker\/ghl-leads$/, view: 'rankCheckerGhlLeads', nav: 'rank-checker-ghl-leads' },
+        { re: /^\/rank-checker\/bulk-scoring$/, view: 'rankCheckerBulk', nav: 'rank-checker-bulk-scoring' },
+        { re: /^\/rank-checker\/manual$/, view: 'rankCheckerManual', nav: 'rank-checker-manual' },
         { re: /^\/business\/([A-Za-z0-9-]+)$/, view: 'business', nav: 'dashboard', params: (m) => ({ id: m[1] }) },
         { re: /^\/audit\/([A-Za-z0-9-]+)$/, view: 'audit', nav: 'dashboard', params: (m) => ({ id: m[1] }) },
         { re: /^\/report\/([A-Za-z0-9-]+)\/(full|prospect)$/, view: 'report', nav: 'dashboard', params: (m) => ({ id: m[1], mode: m[2] }) },
         { re: /^\/share\/([A-Za-z0-9-]+)$/, view: 'share', nav: null, public: true, params: (m) => ({ token: m[1] }) },
-        { re: /^\/settings(?:\/(branding|scoring|embed))?$/, view: 'settings', nav: 'settings', params: (m) => ({ tab: m[1] || 'branding' }) },
+        { re: /^\/settings(?:\/(branding|scoring|embed|rank-checker))?$/, view: 'settings', nav: 'settings', params: (m) => ({ tab: m[1] || 'branding' }) },
     ];
 
     let renderSeq = 0;
